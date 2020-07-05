@@ -6,6 +6,8 @@ use Illuminate\Console\Command;
 use App\Shop;
 use App\Product;
 use Carbon\Carbon;
+use stdClass;
+
 class InsertProducts extends Command
 {
     /**
@@ -42,17 +44,12 @@ class InsertProducts extends Command
         $shops = Shop::get();
         foreach($shops as $shop) {
             $products = $this->parseXml($shop->url);
-            $sales = $this->structureData($products);
-
             $settings = [
                 'api_url' => env('FACTORIEL_URL'),
                 'api_key' => $shop->api_key,
                 'api_number' => $shop->api_number
             ];
-            foreach($sales as $sale) {
-                $status = $this->sendDataToFacturiel($sale, $settings);
-                $this->insertProducts($sale, $shop->id, $status);
-            }
+            $this->structureDataAndSendtoFacturiel($products, $settings, $shop);
         }
 
     }
@@ -64,41 +61,33 @@ class InsertProducts extends Command
         $arr = $this->xmlToArray($xml,$namespaces);
         return $arr;
     }
-    private function structureData($products) {
-        $data = [];
+    private function structureDataAndSendtoFacturiel($products, $settings, $shop) {
         $products = $products['sale'];
         $count = count($products);
         for($i = 0; $i < $count; $i++) {
-
-            $data[] = [
-                'client_number' => $products[$i]['client_number'][0],
-                'order_id' => (int) $products[$i]['order_id'][0],
-                'payment_method_id' => $products[$i]['payment_method_id'][0],
-                'total' => $products[$i]['total'][0],
-                'var_percent' => $products[$i]['vat_percent'][0] > 0 ? $products[$i]['vat_percent'][0] : 0,
-                'source_id' => $products[$i]['source_id'][0],
-                'object_id' => $products[$i]['object_id'][0],
-                'station_id' => $products[$i]['station_id'][0],
-                'add_to_catalog' => $products[$i]['add_to_catalog'][0],
-                'autoload_measure' => $products[$i]['autoload_measure'][0],
-                'rows' => $this->structureRows($products[$i]['rows'])
-            ];
-        }
-
-        return $data;
-    }
-
-    private function structureRows($rows) {
-        $data = [];
-        for ($i = 0; $i < count($rows[0]['name']); $i++) {
-            $data[] = [
-                'name' => isset($rows[0]['name'][$i]) ? $rows[0]['name'][$i] : null,
-                'quantity' => isset($rows[0]['quantity'][$i]) ? $rows[0]['quantity'][$i] : null,
-                'measure_id' => isset($rows[0]['measure_id'][$i]) ? $rows[0]['measure_id'][$i] : null,
-                'price' => isset($rows[0]['price'][$i]) ? $rows[0]['price'][$i] : null,
-                'discount_percent' => isset($rows[0]['discount_percent'][$i]) ? $rows[0]['discount_percent'][$i] : null,
-                'code' => isset($rows[0]['code'][$i]) ? $rows[0]['code'][$i] : null,
-            ];
+            $data = new StdClass();
+            $data->client_number = $products[$i]['client_number'][0];
+            $data->order_id = (int) $products[$i]['order_id'][0];
+            $data->payment_method_id = $products[$i]['payment_method_id'][0];
+            $data->total = $products[$i]['total'][0];
+            $data->vat_percent = $products[$i]['vat_percent'][0] > 0 ? $products[$i]['vat_percent'][0] : 0;
+            $data->source_id = $products[$i]['source_id'][0];
+            $data->object_id = $products[$i]['object_id'][0];
+            $data->station_id = $products[$i]['station_id'][0];
+            $data->add_to_catalog = $products[$i]['add_to_catalog'][0];
+            $data->autoload_measure = $products[$i]['autoload_measure'][0];
+            for ($i = 0; $i < count($products[$i]['rows'][0]['name']); $i++) {
+                $row = new stdClass();
+                $row->name = isset($products[$i]['rows'][0]['name'][$i]) ? $products[$i]['rows'][0]['name'][$i] : null;
+                $row->quantity = isset($products[$i]['rows'][0]['quantity'][$i]) ? $products[$i]['rows'][0]['quantity'][$i] : null;
+                $row->measure_id = isset($products[$i]['rows'][0]['measure_id'][$i]) ? $products[$i]['rows'][0]['measure_id'][$i] : null;
+                $row->price = isset($products[$i]['rows'][0]['price'][$i]) ? $products[$i]['rows'][0]['price'][$i] : null;
+                $row->discount_percent = isset($products[$i]['rows'][0]['discount_percent'][$i]) ? $products[$i]['rows'][0]['discount_percent'][$i] : 0;
+                $row->code = isset($products[$i]['rows'][0]['code'][$i]) ? $products[$i]['rows'][0]['code'][$i] : 0;
+                $data->rows[] = $row;
+            }
+            $status = $this->sendDataToFacturiel($data, $settings);
+            $this->insertProducts($data, $shop->id, $status);
         }
 
         return $data;
@@ -140,16 +129,20 @@ class InsertProducts extends Command
 
         $ch = curl_init();
         try{
+            $sale->station_id = -1;
             curl_setopt($ch, CURLOPT_URL, $settings['api_url']. 'sale_create');
             curl_setopt($ch, CURLOPT_HTTPHEADER, array('Authorization: Basic '. base64_encode($settings['api_number'].':'.$settings['api_key'])));
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
             curl_setopt($ch, CURLOPT_POST, 1);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query(json_encode(['sale' => $sale])));
+            curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query(['sale' => json_encode($sale)]));
             $response = curl_exec($ch);
             $this->P($response);
-            // $status = 'Успешно записан във Фактуриел с номер: ' .$response['sale']['id'];
+            exit;
+            $status = 'Успешно записан във Фактуриел с номер: ' .$response['sale']['id'];
           }catch (Exception $ex) {
             $status = 'Грешка: '.$ex->getMessage();
+            echo $status;
+            exit;
           }finally{
             curl_close($ch);
           }
